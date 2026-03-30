@@ -39,41 +39,79 @@ const AuthModal = ({ onClose }) => {
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal">
-        <h2>{isLogin ? "Login" : "Sign Up"}</h2>
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose}>
+          &times;
+        </button>
+        <h2>{isLogin ? "Welcome Back" : "Create Account"}</h2>
+        <p style={{ color: "var(--text-secondary)", marginBottom: "1rem" }}>
+          {isLogin
+            ? "Sign in to access your dashboard"
+            : "Join us to manage candidates efficiently"}
+        </p>
 
-        <input
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
+        <div className="form-group">
+          <label className="form-label">Email Address</label>
+          <input
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
 
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
+        <div className="form-group">
+          <label className="form-label">Password</label>
+          <input
+            type="password"
+            placeholder="••••••••"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
 
-        {errorMsg && <p style={{ color: "red" }}>{errorMsg}</p>}
+        {errorMsg && (
+          <p
+            style={{
+              color: "#ef4444",
+              fontSize: "0.9rem",
+              padding: "0.5rem",
+              background: "rgba(239, 68, 68, 0.1)",
+              borderRadius: "var(--radius-sm)",
+            }}
+          >
+            {errorMsg}
+          </p>
+        )}
 
-        <button onClick={handleSubmit} disabled={loading}>
+        <button
+          className="btn btn-primary"
+          style={{ marginTop: "1rem" }}
+          onClick={handleSubmit}
+          disabled={loading}
+        >
           {loading
             ? "Please wait..."
             : isLogin
-            ? "Login"
-            : "Create Account"}
+              ? "Login to Account"
+              : "Create Account"}
         </button>
 
         <p
           onClick={() => setIsLogin(!isLogin)}
-          style={{ cursor: "pointer" }}
+          style={{
+            cursor: "pointer",
+            textAlign: "center",
+            marginTop: "0.5rem",
+            color: "var(--brand-primary)",
+            fontWeight: "500",
+          }}
         >
-          {isLogin ? "Create account" : "Already have an account?"}
+          {isLogin
+            ? "Don't have an account? Sign up"
+            : "Already have an account? Log in"}
         </p>
-
-        <button onClick={onClose}>Close</button>
       </div>
     </div>
   );
