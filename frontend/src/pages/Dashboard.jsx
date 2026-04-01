@@ -45,12 +45,29 @@ const Dashboard = () => {
       >
         {jobs.map((job) => (
           <div key={job.id} className="job-card">
-            <h3 style={{ fontSize: "1.25rem", margin: "0 0 0.5rem" }}>
-              {job.title}
+            <h3 style={{ fontSize: "1.25rem", margin: "0 0 0.5rem", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span>{job.title}</span>
+              {job.deadline && (
+                <span style={{
+                  fontSize: "0.8rem",
+                  fontWeight: "normal",
+                  padding: "0.2rem 0.6rem",
+                  borderRadius: "1rem",
+                  backgroundColor: new Date(new Date(job.deadline).setHours(23, 59, 59, 999)) < new Date() ? "rgba(255, 77, 77, 0.1)" : "rgba(76, 175, 80, 0.1)",
+                  color: new Date(new Date(job.deadline).setHours(23, 59, 59, 999)) < new Date() ? "var(--error-color, #ff4d4d)" : "var(--success-color, #4caf50)",
+                }}>
+                  {new Date(new Date(job.deadline).setHours(23, 59, 59, 999)) < new Date() ? "Closed" : "Active"}
+                </span>
+              )}
             </h3>
-            <p style={{ color: "var(--text-secondary)", marginBottom: "1rem" }}>
+            <p style={{ color: "var(--text-secondary)", marginBottom: "0.5rem" }}>
               {job.description}
             </p>
+            {job.deadline && (
+              <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: "1rem", opacity: 0.8 }}>
+                Deadline: {new Date(job.deadline).toLocaleDateString()}
+              </p>
+            )}
             <div
               style={{
                 marginTop: "auto",
