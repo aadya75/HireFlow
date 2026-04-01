@@ -32,6 +32,7 @@ import sys
 import io
 from datetime import datetime, timezone, timedelta
 from typing import Annotated, Dict, List, Literal, Optional
+from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -52,15 +53,14 @@ if sys.platform == "win32":
 # LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
 
+log_dir = Path(__file__).parent.parent / "logs"
+log_dir.mkdir(exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s  %(message)s",
     handlers=[
-        # Use relative path from project root
-        log_dir = Path(__file__).parent.parent / "logs"
-        log_dir.mkdir(exist_ok=True)
-
-        logging.FileHandler(log_dir / f"recruitment_{datetime.now():%Y%m%d}.log")
+        logging.FileHandler(log_dir / f"recruitment_{datetime.now():%Y%m%d}.log"),
         logging.StreamHandler(),
     ],
 )

@@ -31,12 +31,16 @@ class SupabaseService:
         return self._serialize(response.data[0]) if response.data else None
     
     def get_job_with_applications(self, job_id: UUID):
-        """Returns (job_dict, list_of_candidate_dicts)"""
+        """Fetch job and all associated candidates"""
         job = self.get_job(job_id)
         if not job:
             return None, []
         
-        response = self.admin_client.table("candidates").select("*").eq("job_id", str(job_id)).execute()
+        response = self.admin_client.table("candidates")\
+            .select("*")\
+            .eq("job_id", str(job_id))\
+            .execute()
+        
         candidates = [self._serialize(c) for c in response.data]
         return job, candidates
 
