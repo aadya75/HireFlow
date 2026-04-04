@@ -24,6 +24,7 @@ Key design decisions:
 from __future__ import annotations
 
 import asyncio
+import httpx
 import logging
 import operator
 import os
@@ -33,6 +34,7 @@ import io
 from datetime import datetime, timezone, timedelta
 from typing import Annotated, Dict, List, Literal, Optional
 from pathlib import Path
+from typing import Annotated, Dict, List, Literal, Optional, Any
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -40,6 +42,7 @@ from langchain_groq import ChatGroq
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from pydantic import BaseModel, Field
+from app.routes.logs import add_log
 
 from app.workers.gmail_tools import send_gmail_message
 from app.workers.calendar_tools import create_calendar_event
@@ -296,6 +299,7 @@ def guardrails_node(state: RecruitmentState) -> dict:
         errors.append(msg)
 
     logger.info(f"[guardrails] PII redacted. errors={errors}")
+    add_log(state.job_id, "info", "Guardrails check completed", {"applications": len(state.applications), "errors": errors})
     return {"applications": clean_apps, "errors": errors}
 
 
@@ -388,6 +392,7 @@ def planning_agent_node(state: RecruitmentState) -> dict:
         reasoning=reasoning,
     )
     logger.info(f"[planner] plan ready: {len(tasks)} tasks")
+    add_log(state.job_id, "info", f"Planning completed", {"rubric": rubric_text, "tasks": len(tasks)})
     return {"plan": plan}
 
 
@@ -444,6 +449,14 @@ async def resume_scorer_node(payload: dict) -> dict:
                 culture_score=50, composite_score=50,
                 reasoning="Scorer error — default score assigned",
             )]}
+    add_log(job.job_id, "score", f"Candidate {task.candidate_name} scored {score.composite_score}", {
+    "candidate": task.candidate_name,
+    "score": score.composite_score,
+    "skill_score": score.skill_score,
+    "experience_score": score.experience_score,
+    "culture_score": score.culture_score,
+    "reasoning": score.reasoning
+})
 
 
 async def fit_classifier_node(payload: dict) -> dict:
@@ -587,7 +600,60 @@ def score_aggregator_node(state: RecruitmentState) -> dict:
             low_tier.append(aid)
 
     logger.info(f"[aggregator] HIGH={len(high_tier)} MID={len(mid_tier)} LOW={len(low_tier)}")
+    add_log(state.job_id, "decision", f"Categorized {len(high_tier)} HIGH, {len(mid_tier)} MID, {len(low_tier)} LOW", {
+        "high": len(high_tier),
+        "mid": len(mid_tier),
+        "low": len(low_tier)
+    })
     return {"high_tier": high_tier, "mid_tier": mid_tier, "low_tier": low_tier}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATABASE RESULT SAVER - Decoupled from orchestrator logic
+# ─────────────────────────────────────────────────────────────────────────────
+
+def save_screening_results_to_db(job_id: str, scores: List[ResumeScore], classifications: List[FitClassification]):
+    """
+    Save screening results to database.
+    This is called AFTER orchestrator completes, not during.
+    """
+    from app.supabase import supabase
+    
+    for score in scores:
+        # Find matching classification
+        classification = next((c for c in classifications if c.application_id == score.application_id), None)
+        
+        if classification:
+            if classification.tier == "HIGH":
+                status = "shortlist"
+            elif classification.tier == "MID":
+                status = "pending_review"
+            else:
+                status = "rejected"
+        else:
+            if score.composite_score >= 80:
+                status = "shortlist"
+            elif score.composite_score >= 40:
+                status = "pending_review"
+            else:
+                status = "rejected"
+        
+        # Update candidate in database
+        supabase.update_candidate_score(score.application_id, {
+            "screening_score": score.composite_score,
+            "screening_status": status,
+            "screening_details": {
+                "skill_score": score.skill_score,
+                "experience_score": score.experience_score,
+                "culture_score": score.culture_score,
+                "reasoning": score.reasoning
+            }
+        })
+        logger.info(f"[db] Saved score for {score.application_id}: {score.composite_score} -> {status}")
+    
+    # Mark job as processed
+    supabase.mark_job_processed(job_id)
+    logger.info(f"[db] Job {job_id} marked as processed")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -895,14 +961,27 @@ def build_recruitment_orchestrator() -> StateGraph:
 
 class RecruitmentOrchestrator:
     """
-    Entry point. Call .process() when a job closes.
-
-        orch   = RecruitmentOrchestrator()
-        result = await orch.process(job=JobDescription(...), applications=[...])
+    Entry point for recruitment screening orchestrator.
+    
+    Usage:
+        orch = RecruitmentOrchestrator()
+        result = await orch.process(job, applications)
+        
+        # With database persistence:
+        orch = RecruitmentOrchestrator(supabase_client=supabase)
+        result = await orch.process_and_save(job, applications, job_id)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, supabase_client=None) -> None:
+        """
+        Initialize orchestrator.
+        
+        Args:
+            supabase_client: Optional Supabase client for database persistence.
+                           If provided, results will be saved automatically.
+        """
         self.graph = build_recruitment_orchestrator()
+        self.supabase = supabase_client
         logger.info("RecruitmentOrchestrator ready")
 
     async def process(
@@ -911,6 +990,10 @@ class RecruitmentOrchestrator:
         applications: List[CandidateProfile],
         token_data: Optional[dict] = None,
     ) -> dict:
+        """
+        Process applications without saving to database.
+        Returns screening results.
+        """
         if not applications:
             return {"success": False, "response": "No applications to process.", "metadata": {}}
 
@@ -919,24 +1002,108 @@ class RecruitmentOrchestrator:
             job=job,
             applications=applications,
         )
+        
         try:
-            final = await self.graph.ainvoke(initial.model_dump())
-            log: Optional[FeedbackLog] = final.get("feedback_log")
+            final_state = await self.graph.ainvoke(initial.model_dump())
+            
+            # Extract results from final state
+            scores = final_state.get("scores", [])
+            classifications = final_state.get("classifications", [])
+            high_tier = final_state.get("high_tier", [])
+            mid_tier = final_state.get("mid_tier", [])
+            low_tier = final_state.get("low_tier", [])
+            
+            # Build result summary
+            result_scores = []
+            for score in scores:
+                result_scores.append({
+                    "application_id": score.application_id,
+                    "composite_score": score.composite_score,
+                    "skill_score": score.skill_score,
+                    "experience_score": score.experience_score,
+                    "culture_score": score.culture_score,
+                    "reasoning": score.reasoning,
+                })
+            
+            log = final_state.get("feedback_log")
+            
             return {
                 "success": True,
                 "response": (
                     f"Processed {len(applications)} applications for '{job.title}'. "
-                    f"HIGH={len(final.get('high_tier', []))} "
-                    f"MID={len(final.get('mid_tier', []))} "
-                    f"LOW={len(final.get('low_tier', []))}"
+                    f"HIGH={len(high_tier)} MID={len(mid_tier)} LOW={len(low_tier)}"
                 ),
-                "metadata": log.model_dump() if log else {},
-                "errors":   final.get("errors", []),
+                "metadata": {
+                    "scores": result_scores,
+                    "high_tier": high_tier,
+                    "mid_tier": mid_tier,
+                    "low_tier": low_tier,
+                    "feedback_log": log.model_dump() if log else {},
+                },
+                "errors": final_state.get("errors", []),
             }
+            
         except Exception as exc:
             logger.error(f"Orchestrator error: {exc}", exc_info=True)
             return {"success": False, "response": str(exc), "metadata": {}}
 
+    async def process_and_save(
+        self,
+        job: JobDescription,
+        applications: List[CandidateProfile],
+        job_id: str,
+        token_data: Optional[dict] = None,
+    ) -> dict:
+        """
+        Process applications AND save results to database.
+        Requires supabase_client to be provided in constructor.
+        """
+        if not self.supabase:
+            logger.warning("No supabase client provided, falling back to process()")
+            return await self.process(job, applications, token_data)
+        
+        # Run the orchestrator
+        result = await self.process(job, applications, token_data)
+        
+        if result.get("success"):
+            # Save scores to database
+            metadata = result.get("metadata", {})
+            scores_data = metadata.get("scores", [])
+            
+            # Convert to ResumeScore objects and save
+            for score_data in scores_data:
+                self.supabase.update_candidate_score(
+                    score_data["application_id"],
+                    {
+                        "screening_score": score_data["composite_score"],
+                        "screening_status": self._get_status_from_score(score_data["composite_score"]),
+                        "screening_details": {
+                            "skill_score": score_data["skill_score"],
+                            "experience_score": score_data["experience_score"],
+                            "culture_score": score_data["culture_score"],
+                            "reasoning": score_data["reasoning"],
+                        }
+                    }
+                )
+                logger.info(f"[db] Saved score for {score_data['application_id']}")
+            
+            # Mark job as processed
+            self.supabase.mark_job_processed(job_id)
+            logger.info(f"[db] Job {job_id} marked as processed")
+            
+            result["metadata"]["db_saved"] = True
+        
+        return result
+    
+    def _get_status_from_score(self, score: float) -> str:
+        """Convert numerical score to status string"""
+        if score >= 80:
+            return "shortlist"
+        elif score >= 40:
+            return "pending_review"
+        else:
+            return "rejected"
+        
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI SMOKE TEST

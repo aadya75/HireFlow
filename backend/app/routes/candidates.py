@@ -1,34 +1,58 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+import os
+from fastapi import APIRouter, HTTPException, File, UploadFile, Form
 from typing import List
 from uuid import UUID
 import uuid
+from datetime import datetime
 
-from app.api_models import CandidateApplyRequest, CandidateResponse, CandidateWithScore
+from app.api_models import CandidateResponse
 from app.supabase import supabase
-from app.orchestration import RecruitmentOrchestrator
 
 router = APIRouter()
-orchestrator = RecruitmentOrchestrator()
 
 
 @router.post("/apply", response_model=CandidateResponse, status_code=201)
-async def apply_to_job(candidate: CandidateApplyRequest) -> CandidateResponse:
-    """Submit a job application"""
-    job = supabase.get_job(candidate.job_id)
+async def apply_to_job(
+    job_id: str = Form(...),
+    name: str = Form(...),
+    email: str = Form(...),
+    resume: UploadFile = File(...),
+) -> CandidateResponse:
+    allowed_extensions = {'.pdf', '.docx'}
+    file_ext = os.path.splitext(resume.filename)[1].lower()
+    
+    if file_ext not in allowed_extensions:
+        raise HTTPException(status_code=400, detail="Only PDF and DOCX files are allowed")
+    
+    job = supabase.get_job(UUID(job_id))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
     existing = supabase.admin_client.table("candidates")\
         .select("*")\
-        .eq("email", candidate.email)\
-        .eq("job_id", str(candidate.job_id))\
+        .eq("email", email)\
+        .eq("job_id", job_id)\
         .execute()
     
     if existing.data:
         raise HTTPException(status_code=400, detail="Application already exists")
     
-    candidate_data = candidate.model_dump()
-    candidate_data["id"] = str(uuid.uuid4())
+    file_name = f"{uuid.uuid4()}_{datetime.now().strftime('%Y%m%d')}{file_ext}"
+    storage_path = f"resumes/{file_name}"
+    
+    content = await resume.read()
+    supabase.admin_client.storage.from_("resumes").upload(storage_path, content)
+    resume_url = supabase.admin_client.storage.from_("resumes").get_public_url(storage_path)
+    
+    # Remove screening_status from insert - let it be NULL/default
+    candidate_data = {
+        "id": str(uuid.uuid4()),
+        "job_id": job_id,
+        "name": name,
+        "email": email,
+        "resume_url": resume_url,
+        # "screening_status" removed - will use database default
+    }
     
     result = supabase.admin_client.table("candidates").insert(candidate_data).execute()
     if not result.data:
@@ -39,7 +63,6 @@ async def apply_to_job(candidate: CandidateApplyRequest) -> CandidateResponse:
 
 @router.get("/jobs/{job_id}/candidates", response_model=List[CandidateResponse])
 async def get_job_candidates(job_id: UUID) -> List[CandidateResponse]:
-    """Retrieve all candidates for a specific job"""
     response = supabase.admin_client.table("candidates")\
         .select("*")\
         .eq("job_id", str(job_id))\
@@ -49,7 +72,6 @@ async def get_job_candidates(job_id: UUID) -> List[CandidateResponse]:
 
 @router.get("/{candidate_id}", response_model=CandidateResponse)
 async def get_candidate(candidate_id: UUID) -> CandidateResponse:
-    """Retrieve a specific candidate by ID"""
     response = supabase.admin_client.table("candidates")\
         .select("*")\
         .eq("id", str(candidate_id))\
@@ -59,57 +81,3 @@ async def get_candidate(candidate_id: UUID) -> CandidateResponse:
         raise HTTPException(status_code=404, detail="Candidate not found")
     
     return response.data[0]
-
-
-@router.post("/{candidate_id}/process", response_model=CandidateResponse)
-async def process_candidate(candidate_id: UUID) -> CandidateResponse:
-    """Trigger screening for a specific candidate"""
-    response = supabase.admin_client.table("candidates")\
-        .select("*")\
-        .eq("id", str(candidate_id))\
-        .execute()
-    
-    if not response.data:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    
-    candidate_data = response.data[0]
-    job = supabase.get_job(UUID(candidate_data["job_id"]))
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Associated job not found")
-    
-    from app.orchestration import JobDescription, CandidateProfile
-    
-    job_description = JobDescription(
-        job_id=job["id"],
-        recruiter_id=job["recruiter_id"],
-        recruiter_email="",
-        title=job["title"],
-        required_skills=[],
-        min_years_experience=0.0,
-        description=job["description"],
-        closed_at=job.get("created_at", ""),
-    )
-    
-    candidate_profile = CandidateProfile(
-        application_id=candidate_data["id"],
-        job_id=candidate_data["job_id"],
-        candidate_name=candidate_data["name"],
-        candidate_email=candidate_data["email"],
-        resume_text="",
-        years_experience=0.0,
-        skills=[],
-        applied_at=candidate_data.get("created_at", ""),
-    )
-    
-    result = await orchestrator.process(job_description, [candidate_profile])
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail="Processing failed")
-    
-    updated = supabase.admin_client.table("candidates")\
-        .select("*")\
-        .eq("id", str(candidate_id))\
-        .execute()
-    
-    return updated.data[0]
