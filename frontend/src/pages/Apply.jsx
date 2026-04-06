@@ -1,10 +1,11 @@
 import { useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { supabase } from "../lib/supabase";
+import { useAuth } from "../context/AuthContext";
+import { api } from "../services/api";
 
 const Apply = () => {
   const { jobId } = useParams();
-
+  const { session } = useAuth();
   const [job, setJob] = useState(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -14,17 +15,18 @@ const Apply = () => {
 
   useEffect(() => {
     const fetchJob = async () => {
-      const { data } = await supabase
-        .from("jobs")
-        .select("*")
-        .eq("id", jobId)
-        .single();
-
-      setJob(data);
+      try {
+        const data = await api.getJob(jobId);
+        setJob(data);
+      } catch (error) {
+        console.error("Fetch job error:", error);
+      }
     };
 
-    fetchJob();
-  }, []);
+    if (jobId) {
+      fetchJob();
+    }
+  }, [jobId]);
 
   const handleSubmit = async () => {
     if (!file || !name || !email) {
@@ -32,52 +34,51 @@ const Apply = () => {
       return;
     }
 
+    // Check if deadline has passed before submitting
+    if (job.deadline && new Date(job.deadline) < new Date()) {
+      alert("This job's application deadline has passed. You cannot apply.");
+      return;
+    }
+
     setLoading(true);
 
-    const fileName = `${Date.now()}-${file.name}`;
+    const formData = new FormData();
+    formData.append("job_id", jobId);
+    formData.append("name", name);
+    formData.append("email", email);
+    formData.append("resume", file);
 
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from("resumes")
-      .upload(fileName, file);
-
-    if (uploadError) {
-      console.error("Upload error:", uploadError.message);
+    try {
+      const result = await api.applyToJob(formData, session);
+      console.log("Application result:", result);
+      alert("Application submitted successfully!");
+      
+      // Reset form
+      setName("");
+      setEmail("");
+      setFile(null);
+      const fileInput = document.getElementById("resume-input");
+      if (fileInput) fileInput.value = "";
+      
+    } catch (error) {
+      console.error("Submit error:", error);
+      alert(error.message || "Failed to submit application");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { data: urlData } = supabase.storage
-      .from("resumes")
-      .getPublicUrl(uploadData.path);
-
-    const { error: insertError } = await supabase.from("candidates").insert({
-      job_id: jobId,
-      name,
-      email,
-      resume_url: urlData.publicUrl,
-    });
-
-    setLoading(false);
-
-    if (insertError) {
-      console.error("Insert error:", insertError.message);
-      return;
-    }
-
-    alert("Applied successfully!");
   };
 
-  if (!job)
+  if (!job) {
     return (
-      <div
-        className="container"
-        style={{ textAlign: "center", padding: "5rem 0" }}
-      >
+      <div className="container" style={{ textAlign: "center", padding: "5rem 0" }}>
         <p className="subtitle">Loading job details...</p>
       </div>
     );
+  }
 
-  const isDeadlinePassed = job.deadline ? new Date(new Date(job.deadline).setHours(23, 59, 59, 999)) < new Date() : false;
+  const isDeadlinePassed = job.deadline 
+    ? new Date(job.deadline) < new Date()
+    : false;
 
   return (
     <>
@@ -100,10 +101,10 @@ const Apply = () => {
             boxShadow: "0 20px 40px rgba(0,0,0,0.4)"
           }}>
             <h3 style={{ color: "var(--error-color, #ff4d4d)", fontSize: "1.8rem", marginBottom: "1rem", fontWeight: "bold" }}>
-              Time's Up! ⏰
+              Time's Up
             </h3>
             <p style={{ color: "var(--text-secondary)", marginBottom: "2rem", lineHeight: "1.5" }}>
-              The application window for this position has officially closed. We are no longer accepting new submissions.
+              The application window for this position has officially closed.
             </p>
             <button 
               className="btn btn-outline"
@@ -117,94 +118,98 @@ const Apply = () => {
       )}
 
       <div className="container" style={{ marginTop: "2rem" }}>
-      <div
-        className="glass-panel"
-        style={{
-          padding: "3rem",
-          borderRadius: "1rem",
-          maxWidth: "600px",
-          margin: "0 auto",
-        }}
-      >
         <div
+          className="glass-panel"
           style={{
-            marginBottom: "2rem",
-            paddingBottom: "1.5rem",
-            borderBottom: "1px solid var(--border-color)",
+            padding: "3rem",
+            borderRadius: "1rem",
+            maxWidth: "600px",
+            margin: "0 auto",
           }}
         >
-          <h2
-            className="title"
-            style={{ fontSize: "2rem", marginBottom: "0.5rem" }}
+          <div
+            style={{
+              marginBottom: "2rem",
+              paddingBottom: "1.5rem",
+              borderBottom: "1px solid var(--border-color)",
+            }}
           >
-            {job.title}
-          </h2>
-          <p style={{ color: "var(--text-secondary)", lineHeight: "1.6" }}>
-            {job.description}
-          </p>
-          {job.deadline && (
-            <p style={{ color: "var(--text-secondary)", marginTop: "1rem", fontWeight: "bold" }}>
-              Deadline: {new Date(job.deadline).toLocaleDateString()}
+            <h2
+              className="title"
+              style={{ fontSize: "2rem", marginBottom: "0.5rem" }}
+            >
+              {job.title}
+            </h2>
+            <p style={{ color: "var(--text-secondary)", lineHeight: "1.6" }}>
+              {job.description}
             </p>
+            {job.deadline && (
+              <p style={{ color: "var(--text-secondary)", marginTop: "1rem", fontWeight: "bold" }}>
+                Deadline: {new Date(job.deadline).toLocaleString()}
+              </p>
+            )}
+          </div>
+
+          {isDeadlinePassed ? (
+            <div style={{ textAlign: "center", padding: "2rem 0" }}>
+              <h3 style={{ color: "var(--error-color, #ff4d4d)", fontSize: "1.5rem", marginBottom: "1rem" }}>
+                Application Closed
+              </h3>
+              <p style={{ color: "var(--text-secondary)" }}>
+                The deadline for this job has passed.
+              </p>
+            </div>
+          ) : (
+            <>
+              <h3 style={{ fontSize: "1.2rem", marginBottom: "1.5rem" }}>
+                Submit Your Application
+              </h3>
+
+              <div className="form-group" style={{ marginBottom: "1rem" }}>
+                <label className="form-label">Full Name</label>
+                <input
+                  placeholder="Jane Doe"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: "1rem" }}>
+                <label className="form-label">Email Address</label>
+                <input
+                  type="email"
+                  placeholder="jane@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: "2rem" }}>
+                <label className="form-label">Resume (PDF, DOCX)</label>
+                <input
+                  id="resume-input"
+                  type="file"
+                  accept=".pdf,.docx"
+                  style={{
+                    background: "transparent",
+                    border: "1px dashed var(--border-color)",
+                    padding: "1rem",
+                  }}
+                  onChange={(e) => setFile(e.target.files[0])}
+                />
+              </div>
+
+              <button
+                className="btn btn-primary"
+                style={{ width: "100%", padding: "0.8rem", fontSize: "1.1rem" }}
+                onClick={handleSubmit}
+                disabled={loading}
+              >
+                {loading ? "Submitting..." : "Submit Application"}
+              </button>
+            </>
           )}
         </div>
-
-        {isDeadlinePassed ? (
-          <div style={{ textAlign: "center", padding: "2rem 0" }}>
-            <h3 style={{ color: "var(--error-color, #ff4d4d)", fontSize: "1.5rem", marginBottom: "1rem" }}>
-              Application Closed
-            </h3>
-            <p style={{ color: "var(--text-secondary)" }}>
-              The deadline for this job has passed. We are no longer accepting applications.
-            </p>
-          </div>
-        ) : (
-          <>
-            <h3 style={{ fontSize: "1.2rem", marginBottom: "1.5rem" }}>
-          Submit Your Application
-        </h3>
-
-        <div className="form-group" style={{ marginBottom: "1rem" }}>
-          <label className="form-label">Full Name</label>
-          <input
-            placeholder="Jane Doe"
-            onChange={(e) => setName(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group" style={{ marginBottom: "1rem" }}>
-          <label className="form-label">Email Address</label>
-          <input
-            type="email"
-            placeholder="jane@example.com"
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group" style={{ marginBottom: "2rem" }}>
-          <label className="form-label">Resume (PDF, DOCX)</label>
-          <input
-            type="file"
-            style={{
-              background: "transparent",
-              border: "1px dashed var(--border-color)",
-              padding: "1rem",
-            }}
-            onChange={(e) => setFile(e.target.files[0])}
-          />
-        </div>
-
-        <button
-          className="btn btn-primary"
-          style={{ width: "100%", padding: "0.8rem", fontSize: "1.1rem" }}
-          onClick={handleSubmit}
-          disabled={loading}
-        >
-          {loading ? "Submitting..." : "Submit Application"}
-        </button>
-          </>
-        )}
-      </div>
       </div>
     </>
   );

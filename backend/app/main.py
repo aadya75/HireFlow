@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import jobs, candidates
+from app.routes import jobs, candidates, logs  # Add logs import
 from app.config import settings
 
 app = FastAPI(
@@ -12,7 +12,7 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,6 +21,7 @@ app.add_middleware(
 # Include routers
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(candidates.router, prefix="/api/v1/candidates", tags=["candidates"])
+app.include_router(logs.router, prefix="/api/v1/logs", tags=["logs"])  # Add logs router
 
 @app.get("/")
 async def root():
