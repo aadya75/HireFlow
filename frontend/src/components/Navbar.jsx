@@ -22,7 +22,7 @@ const Navbar = () => {
     <>
       <nav className="navbar glass-panel">
         <Link to="/" className="nav-brand">
-          RecruitFlow
+          HireFlow
         </Link>
 
         <div className="nav-actions">
