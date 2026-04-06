@@ -1,43 +1,52 @@
 import { useState } from "react";
-import { supabase } from "../lib/supabase";
 import { useAuth } from "../context/AuthContext";
+import { api } from "../services/api";
 
 const CreateJob = () => {
   const { session } = useAuth();
-
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [deadline, setDeadline] = useState("");
+  const [deadlineDate, setDeadlineDate] = useState("");
+  const [deadlineTime, setDeadlineTime] = useState("23:59");
+  const [loading, setLoading] = useState(false);
 
   const handleCreate = async () => {
-    if (!deadline) {
-      alert("Please set a deadline.");
+    if (!deadlineDate) {
+      alert("Please set a deadline date.");
       return;
     }
 
-    if (deadline < new Date().toISOString().split("T")[0]) {
+    const deadlineDateTime = `${deadlineDate}T${deadlineTime}:00`;
+    
+    if (new Date(deadlineDateTime) < new Date()) {
       alert("Deadline cannot be in the past.");
       return;
     }
 
-    const { data } = await supabase
-      .from("jobs")
-      .insert({
-        title,
-        description,
-        deadline,
-        recruiter_id: session.user.id,
-      })
-      .select()
-      .single();
+    setLoading(true);
 
-    if (data) {
+    try {
+      const data = await api.createJob(
+        {
+          title,
+          description,
+          deadline: deadlineDateTime,
+        },
+        session
+      );
+
       const link = `${window.location.origin}/apply/${data.id}`;
-      alert(`Job link generated: \n${link}`);
-    } else {
-      alert("Failed to create job, make sure the deadline column exists in your database table.");
+      alert(`Job created successfully!\n\nApplication link:\n${link}`);
+    } catch (error) {
+      console.error("Create job error:", error);
+      alert(error.message || "Failed to create job");
+    } finally {
+      setLoading(false);
     }
   };
+
+  // Get today's date in YYYY-MM-DD format
+  const today = new Date().toISOString().split("T")[0];
 
   return (
     <div className="container" style={{ marginTop: "2rem" }}>
@@ -74,23 +83,13 @@ const CreateJob = () => {
           />
         </div>
 
-        <div className="form-group" style={{ marginBottom: "1.5rem" }}>
-          <label className="form-label">Application Deadline</label>
+        <div className="form-group" style={{ marginBottom: "1rem" }}>
+          <label className="form-label">Deadline Date</label>
           <input
-            type={deadline ? "date" : "text"}
-            placeholder="Select Date"
-            min={new Date().toISOString().split("T")[0]}
-            onFocus={(e) => {
-              e.target.type = "date";
-              e.target.showPicker && e.target.showPicker();
-            }}
-            onBlur={(e) => {
-              if (!e.target.value) e.target.type = "text";
-            }}
-            onClick={(e) => {
-              e.target.type = "date";
-              e.target.showPicker && e.target.showPicker();
-            }}
+            type="date"
+            min={today}
+            value={deadlineDate}
+            onChange={(e) => setDeadlineDate(e.target.value)}
             style={{
               width: "100%",
               padding: "0.8rem",
@@ -99,18 +98,38 @@ const CreateJob = () => {
               background: "transparent",
               color: "inherit",
               fontFamily: "inherit",
-              cursor: "pointer"
             }}
-            onChange={(e) => setDeadline(e.target.value)}
           />
+        </div>
+
+        <div className="form-group" style={{ marginBottom: "1.5rem" }}>
+          <label className="form-label">Deadline Time</label>
+          <input
+            type="time"
+            value={deadlineTime}
+            onChange={(e) => setDeadlineTime(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "0.8rem",
+              borderRadius: "0.5rem",
+              border: "1px solid var(--border-color)",
+              background: "transparent",
+              color: "inherit",
+              fontFamily: "inherit",
+            }}
+          />
+          <small style={{ color: "var(--text-secondary)", fontSize: "0.75rem" }}>
+            Applications will close at this time on the selected date
+          </small>
         </div>
 
         <button
           className="btn btn-primary"
           style={{ width: "100%", padding: "0.8rem" }}
           onClick={handleCreate}
+          disabled={loading}
         >
-          Create and Generate Link
+          {loading ? "Creating..." : "Create and Generate Link"}
         </button>
       </div>
     </div>
