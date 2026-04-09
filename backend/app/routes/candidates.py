@@ -38,10 +38,10 @@ async def apply_to_job(
         raise HTTPException(status_code=400, detail="Application already exists")
     
     file_name = f"{uuid.uuid4()}_{datetime.now().strftime('%Y%m%d')}{file_ext}"
-    storage_path = f"resumes/{file_name}"
+    storage_path = file_name
     
     content = await resume.read()
-    supabase.admin_client.storage.from_("resumes").upload(storage_path, content)
+    supabase.admin_client.storage.from_("resumes").upload(storage_path, content, {"content-type": "application/pdf"})
     resume_url = supabase.admin_client.storage.from_("resumes").get_public_url(storage_path)
     
     # Remove screening_status from insert - let it be NULL/default

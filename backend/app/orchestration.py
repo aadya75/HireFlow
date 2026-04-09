@@ -6,8 +6,7 @@ Lifecycle:
     → Guardrails (bias check, PII redaction, rate limit)
     → Memory loader (past decisions, recruiter prefs, JD embeddings)
     → Planning agent (structured ExecutionPlan via with_structured_output)
-    → Parallel worker fan-out (resume scorer, fit classifier,
-                               bias auditor, dedup checker)
+    → Parallel worker fan-out (resume scorer, fit classifier, bias auditor, dedup checker)
     → Score aggregator
     → Conditional router (HIGH / MID / LOW)
     → Gmail worker  (interview invite  OR  rejection email)
@@ -275,7 +274,11 @@ def _redact_pii(text: str) -> str:
 
 def _bias_hits(text: str) -> List[str]:
     lower = text.lower()
-    return [kw for kw in _BIAS_KEYWORDS if kw in lower]
+    hits = []
+    for kw in _BIAS_KEYWORDS:
+        if re.search(rf"\b{kw}\b", lower):
+            hits.append(kw)
+    return hits
 
 
 def guardrails_node(state: RecruitmentState) -> dict:
